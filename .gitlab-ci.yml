@@ -1,0 +1,80 @@
+
+variables:
+  REPOSITORY_URL: meraki2010/sampleproject
+  IMAGE_NAME: demoapp
+  CONTAINERNAME: ${REPOSITORY_URL}:latest 
+
+stages:
+  - build
+  - test
+  - release
+
+build:
+    image: tmaier/docker-compose:latest
+    services:
+      - docker:dind
+    stage: build
+    only:
+      - ci-cd
+    script:
+        - docker login -u meraki2010 -p "$PASSWORD" 
+        - echo "Existing Images" 
+        - docker images -a
+        - echo "Building image..."
+        - docker build -t "${IMAGE_NAME}" .
+        - echo "Build-checks"
+        - echo "${IMAGE_NAME}"
+         # Checking if Build Image with exists. 
+        - if [ "$(docker images ${IMAGE_NAME} | grep ${IMAGE_NAME} 2> /dev/null)" != "" ]; then echo 'image is built successfully'; else echo 'no image' && exit 1; fi
+        - echo "Tagging image..."
+        - docker tag ${IMAGE_NAME} ${REPOSITORY_URL:latest} 
+        - echo "Pushing image..."
+        - docker push ${REPOSITORY_URL:latest}
+    tags:
+      - local-docker-executor    
+
+test:
+    stage: test
+    image: tmaier/docker-compose:latest
+    services:
+      - docker:dind
+    only:
+      - ci-cd
+    before_script:
+        - apk add --update curl && rm -rf /var/cache/apk/*  
+    script:
+        - docker login -u meraki2010 -p "${PASSWORD}" 
+        - echo "Existing containers"
+        - docker ps -a
+        - echo "Pulling Image"
+        - docker pull "${REPOSITORY_URL:latest}"
+        - echo "runing image as Container"
+        - docker run -d -p 80:80/tcp "$REPOSITORY_URL:latest" 
+        - docker ps
+        - echo "Container checks"
+        - echo "${REPOSITORY_URL:latest}"
+        # Checking if Build Image with $IMAGE_NAME name exists. 
+        - if [ "$(docker ps | grep "${REPOSITORY_URL:latest}" 2> /dev/null)" != "" ]; then echo 'Container is up'; else echo 'No container found' && exit 1; fi
+        # Checking for 200 response 
+        - if [ "$(curl -o /dev/null -s -w "%{http_code}\n" http://docker:80)" = "200" ]; then echo 'Site is Active and container is healthy'; else echo 'No site Available' && exit 1; fi
+    tags:
+      - local-docker-executor
+
+release:
+    stage: release
+    script:
+        - echo "executing in the LOCAL_SHELL_EXECUTOR"
+    # Where my kubernetes cluster is configured locally 
+        - echo "K8-deployment in My local Machine"
+        - kubectl version
+        - kubectl apply -f deployment.yml
+        - echo "sleeping for 180sec"
+        - sleep 180
+        - kubectl get svc && kubectl get pods
+        - curl localhost:30030
+        # Checking for 200 response 
+        - if [ "$(curl -o /dev/null -s -w "%{http_code}\n" http://localhost:30030)" = "200" ]; then echo 'Service is deployed & the pod is exposed'; else echo 'Deployment-Error' && exit 1; fi
+    only:
+      - ci-cd
+    tags:
+      - local-shell-executor
